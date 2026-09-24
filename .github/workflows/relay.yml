@@ -1,0 +1,50 @@
+name: Relay Wan Model
+
+on:
+  workflow_dispatch:
+    inputs:
+      model_url:
+        description: 'Hugging Face Direct Download URL'
+        required: true
+        default: 'https://huggingface.co/Wan-AI/Wan2.1-T2V-14B/resolve/main/Wan2.1_T2V_14B_bf16.safetensors'
+      filename:
+        description: 'Original Filename'
+        required: true
+        default: 'Wan2.1_T2V_14B_bf16.safetensors'
+
+permissions:
+  contents: write
+
+jobs:
+  split-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Free Disk Space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+
+      - name: Download Model
+        run: |
+          curl -L -o "${{ github.event.inputs.filename }}" "${{ github.event.inputs.model_url }}"
+
+      - name: Calculate Original SHA-256
+        run: |
+          sha256sum "${{ github.event.inputs.filename }}" > original_sha256.txt
+
+      - name: Split File into 1.9GB chunks
+        run: |
+          split -b 1900M -d "${{ github.event.inputs.filename }}" "${{ github.event.inputs.filename }}.part_"
+          rm "${{ github.event.inputs.filename }}"
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: relay-v1
+          name: "Temporary Relay Wan Model"
+          files: |
+            ${{ github.event.inputs.filename }}.part_*
+            original_sha256.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
