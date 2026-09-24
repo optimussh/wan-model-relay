@@ -6,11 +6,15 @@ on:
       model_url:
         description: 'Hugging Face Direct Download URL'
         required: true
-        default: 'https://huggingface.co/Wan-AI/Wan2.1-T2V-14B/resolve/main/Wan2.1_T2V_14B_bf16.safetensors'
+        default: 'https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/diffusion_models/wan2.2_t2v_high_noise_14B_fp8_scaled.safetensors'
       filename:
         description: 'Original Filename'
         required: true
-        default: 'Wan2.1_T2V_14B_bf16.safetensors'
+        default: 'wan2.2_t2v_high_noise_14B_fp8_scaled.safetensors'
+      tag:
+        description: 'Release tag (파일마다 다르게)'
+        required: true
+        default: 'relay-high'
 
 permissions:
   contents: write
@@ -18,31 +22,47 @@ permissions:
 jobs:
   split-and-release:
     runs-on: ubuntu-latest
+    timeout-minutes: 360
     steps:
-      - name: Free Disk Space
+      - name: Aggressive disk cleanup
         run: |
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /usr/local/lib/android
-          sudo rm -rf /opt/ghc
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache /usr/lib/jvm /usr/local/share/powershell \
+            /opt/microsoft /opt/google || true
+          sudo docker system prune -af || true
+          df -h
 
-      - name: Download Model
+      - name: Download with fail-fast
         run: |
-          curl -L -o "${{ github.event.inputs.filename }}" "${{ github.event.inputs.model_url }}"
+          set -euo pipefail
+          curl -fL --retry 8 --retry-all-errors \
+            -o "${{ github.event.inputs.filename }}" \
+            "${{ github.event.inputs.model_url }}"
+          ls -lh "${{ github.event.inputs.filename }}"
+          BYTES=\( (stat -c%s " \){{ github.event.inputs.filename }}")
+          echo "DOWNLOADED_BYTES=$BYTES"
+          if [ "$BYTES" -lt 100000000 ]; then
+            echo "File too small. Got HTML/error page, not the model."
+            head -c 200 "${{ github.event.inputs.filename }}" || true
+            exit 1
+          fi
 
-      - name: Calculate Original SHA-256
-        run: |
-          sha256sum "${{ github.event.inputs.filename }}" > original_sha256.txt
+      - name: SHA256
+        run: sha256sum "${{ github.event.inputs.filename }}" | tee original_sha256.txt
 
-      - name: Split File into 1.9GB chunks
+      - name: Split 1.9GB then delete original
         run: |
-          split -b 1900M -d "${{ github.event.inputs.filename }}" "${{ github.event.inputs.filename }}.part_"
-          rm "${{ github.event.inputs.filename }}"
+          set -euo pipefail
+          split -b 1900M -d "\( {{ github.event.inputs.filename }}" " \){{ github.event.inputs.filename }}.part_"
+          rm -f "${{ github.event.inputs.filename }}"
+          ls -lh
+          df -h
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: relay-v1
-          name: "Temporary Relay Wan Model"
+          tag_name: ${{ github.event.inputs.tag }}
+          name: "Relay ${{ github.event.inputs.filename }}"
           files: |
             ${{ github.event.inputs.filename }}.part_*
             original_sha256.txt
