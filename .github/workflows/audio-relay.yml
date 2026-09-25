@@ -15,7 +15,6 @@ jobs:
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache /usr/lib/jvm /usr/local/share/powershell /opt/microsoft /opt/google || true
           sudo docker system prune -af || true
-          df -h
 
       - name: Setup Python 3.11
         uses: actions/setup-python@v4
@@ -28,7 +27,6 @@ jobs:
       - name: Download Models & Dependencies
         run: |
           set -euo pipefail
-          # 폴더 구조 생성
           mkdir -p bundle/models/qwen3-customvoice bundle/models/cosyvoice3
           mkdir -p bundle/wheels/qwen3 bundle/wheels/cosyvoice3
           mkdir -p bundle/source
@@ -45,34 +43,30 @@ jobs:
           echo "4. Downloading PyTorch for CosyVoice3..."
           python -m pip download --dest bundle/wheels/cosyvoice3 --index-url "https://download.pytorch.org/whl/cu118" "torch==2.3.1+cu118" "torchaudio==2.3.1+cu118"
           
-          echo "5. Cloning CosyVoice Source (with submodules)..."
+          echo "5. Cloning CosyVoice Source..."
           git clone --recursive https://github.com/QwenAudio/CosyVoice.git bundle/source/CosyVoice
-          
-          # 리비전 및 기록 저장
-          echo "Created on $(date)" > bundle/manifest.txt
-          echo "Includes Qwen3, CosyVoice3, PyTorch wheels(cu118), and CosyVoice source." >> bundle/manifest.txt
 
       - name: Tar, Split and Checksum (On-the-fly)
         run: |
-          echo "용량 절약을 위해 압축과 동시에 분할합니다..."
-          # bundle 폴더를 tar로 묶으면서 바로 1.9GB 단위로 쪼갬 (중간 압축파일 생성 안함)
           tar -cvf - bundle | split -b 1900M -d - bundle.tar.part_
-          
-          echo "분할된 파일들로 원본 SHA-256 해시를 계산합니다..."
           cat bundle.tar.part_* | sha256sum | awk '{print $1 "  bundle.tar"}' > bundle_sha256.txt
-          
-          echo "업로드를 위해 원본 폴더 삭제 (용량 확보)..."
           rm -rf bundle
-          ls -lh
-          df -h
 
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: relay-audio
-          name: "Relay Audio Models & Wheels Bundle"
-          files: |
-            bundle.tar.part_*
-            bundle_sha256.txt
+      - name: Sequential Upload to Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # 1. 기존에 실패한 찌꺼기 릴리즈가 있다면 삭제 (오류 방지)
+          gh release delete relay-audio -y || true
+          
+          # 2. 새 릴리즈 생성
+          gh release create relay-audio -t "Relay Audio Models & Wheels Bundle" -n "Sequential upload"
+          
+          # 3. 파일 한 개씩 순서대로 업로드
+          echo "Uploading SHA256 file..."
+          gh release upload relay-audio bundle_sha256.txt
+          
+          for f in bundle.tar.part_*; do
+            echo "Uploading $f..."
+            gh release upload relay-audio "$f"
+          done
